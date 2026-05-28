@@ -1,0 +1,105 @@
+@startuml CD06_Module_AI
+title Module 6: AI Chatbot
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+' ============================================================
+' GUI
+' ============================================================
+package "GUI (React Frontend)" <<Rectangle>> #E3F2FD {
+    class AIAgent {
+        + sendMessage()
+        + renderResponse()
+    }
+}
+
+' ============================================================
+' API
+' ============================================================
+package "API Layer" <<Rectangle>> #C8E6C9 {
+    class AiController <<@RestController>> {
+        - geminiAgent : ChatClient
+        - chatMemory : ChatMemory
+        --
+        + chat(message, userId, role) : String
+    }
+}
+
+' ============================================================
+' BLL
+' ============================================================
+package "Business Logic Layer" <<Rectangle>> #FFF9C4 {
+    class AiClientConfig <<@Configuration>> {
+        + geminiChatClient(builder) : ChatClient
+        + chatMemory() : ChatMemory
+    }
+
+    class AiFunctionConfig <<@Configuration>> {
+        -- Nhóm Dịch vụ --
+        + searchTours(ServiceService) : Function
+        + getTourDetails(ServiceService) : Function
+        + manageService(ServiceService) : Function
+        -- Nhóm Đặt chỗ --
+        + checkSlots(AvailabilityService) : Function
+        + addToCart(BookingManager) : Function
+        + queryOrders(BookingManager, PaymentService) : Function
+        + manageOrder(BookingManager) : Function
+        -- Nhóm Provider --
+        + providerInsights(ServiceService, BookingManager, FeedbackService) : Function
+        + manageOperations(BookingManager, ServiceSlotService) : Function
+        + createTourSlot(ServiceSlotService) : Function
+        -- Nhóm Đánh giá --
+        + manageFeedback(FeedbackService) : Function
+    }
+
+    note bottom of AiFunctionConfig
+        Pattern: Adapter
+        AI gọi Function Calling
+        → delegate tới Service
+    end note
+
+    interface ServiceService <<Module 2>>
+    interface BookingManager <<Module 4>>
+    interface PaymentService <<Module 4>>
+    interface AvailabilityService <<Module 3>>
+    interface ServiceSlotService <<Module 3>>
+    interface FeedbackService <<Module 5>>
+}
+
+' ============================================================
+' DAL
+' ============================================================
+package "Data Access Layer" <<Rectangle>> #FFCCBC {
+    note as N1
+        Module AI không có
+        Repository riêng.
+        Truy cập dữ liệu thông qua
+        các Service của Module khác.
+    end note
+}
+
+' ============================================================
+' DATABASE
+' ============================================================
+package "Database (PostgreSQL)" <<Database>> #F3E5F5 {
+    note as N2
+        Không có bảng riêng.
+        Đọc/ghi qua các Module:
+        services, bookings,
+        feedbacks, service_slots...
+    end note
+}
+
+' === RELATIONSHIPS ===
+AIAgent --> AiController : HTTP GET
+
+AiController --> AiClientConfig : uses
+AiFunctionConfig ..> ServiceService : delegates
+AiFunctionConfig ..> BookingManager : delegates
+AiFunctionConfig ..> PaymentService : delegates
+AiFunctionConfig ..> AvailabilityService : delegates
+AiFunctionConfig ..> ServiceSlotService : delegates
+AiFunctionConfig ..> FeedbackService : delegates
+
+@enduml

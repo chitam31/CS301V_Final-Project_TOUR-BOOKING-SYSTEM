@@ -1,0 +1,88 @@
+@startuml SD07_Apply_Voucher
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-07: Apply Voucher (Discount Code) to Booking**
+
+actor "Customer" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "BookingController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "BookingManager" as BLL_Mgr
+    participant "VoucherService" as BLL_Voucher
+    participant "BookingService" as BLL_Book
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "BookingRepository" as DAL_Book
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Apply Voucher Flow ==
+
+GUI -> API : POST /api/bookings/{bookingId}/voucher\n?voucherCode=GIAM100K
+activate API
+
+API -> BLL_Mgr : applyVoucher(bookingId, voucherCode)
+activate BLL_Mgr
+
+note right of BLL_Mgr : Step 1: Validate voucher & calculate discount
+BLL_Mgr -> BLL_Voucher : calculateDiscount(voucherCode)
+activate BLL_Voucher
+
+BLL_Voucher -> BLL_Voucher : validate code\n(null check, match against known codes)
+
+alt #FFE0E0 Invalid or expired voucher code
+    BLL_Voucher --> BLL_Mgr : throw RuntimeException\n("Invalid or expired voucher code!")
+    BLL_Mgr --> API : throw RuntimeException
+    API --> GUI : 500 Internal Server Error
+
+else #E0FFE0 Valid voucher code
+    BLL_Voucher --> BLL_Mgr : discountAmount\n(e.g. 100,000 VND)
+    deactivate BLL_Voucher
+
+    note right of BLL_Mgr : Step 2: Apply discount to booking
+    BLL_Mgr -> BLL_Book : applyDiscount(bookingId, voucherCode, discount)
+    activate BLL_Book
+
+    BLL_Book -> DAL_Book : findById(bookingId)
+    activate DAL_Book
+    DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+    activate DB
+    DB --> DAL_Book : Booking
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+
+    BLL_Book -> BLL_Book : entityManager.refresh(booking)\n(sync latest totalPrice from DB trigger)
+
+    BLL_Book -> BLL_Book : setVoucherCode(voucherCode)
+    BLL_Book -> BLL_Book : finalAmount = totalPrice - discount\nif finalAmount < 0 → finalAmount = 0
+
+    BLL_Book -> DAL_Book : save(booking)
+    activate DAL_Book
+    DAL_Book -> DB : UPDATE bookings\nSET voucher_code = ?, final_amount = ?\nWHERE id = ?
+    activate DB
+    DB --> DAL_Book : updated
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+
+    BLL_Book --> BLL_Mgr : Booking (updated with discount)
+    deactivate BLL_Book
+
+    BLL_Mgr --> API : Booking
+    deactivate BLL_Mgr
+
+    API --> GUI : 200 OK (Booking JSON\nwith new finalAmount)
+end
+
+deactivate API
+
+@enduml

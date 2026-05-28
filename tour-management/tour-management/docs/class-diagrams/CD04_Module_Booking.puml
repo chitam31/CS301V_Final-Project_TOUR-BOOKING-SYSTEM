@@ -1,0 +1,238 @@
+@startuml CD04_Module_Booking
+title Module 4: Booking (Đặt Tour)
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+' ============================================================
+' GUI
+' ============================================================
+package "GUI (React Frontend)" <<Rectangle>> #E3F2FD {
+    class CartPage {
+        + renderCartItems()
+        + applyVoucher()
+        + checkout()
+    }
+    class CheckoutPage {
+        + selectPaymentMethod()
+        + confirmPayment()
+    }
+    class MyBookings {
+        + renderBookings()
+        + cancelBooking()
+    }
+    class Orders {
+        + confirmItem()
+        + rejectItem()
+    }
+}
+
+' ============================================================
+' API
+' ============================================================
+package "API Layer" <<Rectangle>> #C8E6C9 {
+    class BookingController <<@RestController>> {
+        - bookingManager : BookingManager
+        - availabilityService : AvailabilityService
+        --
+        + getAvailableSlots(serviceId, date) : List<SlotAvailabilityDTO>
+        + addItem(request: BookingRequest) : BookingItem
+        + removeItem(itemId) : void
+        + applyVoucher(bookingId, voucherCode) : Booking
+        + pay(bookingId, method) : void
+        + cancel(bookingId) : void
+        + getCart(customerId) : Booking
+        + getCustomerHistory(customerId) : List<Booking>
+        + getProviderItems(providerId) : List<BookingItem>
+        + confirmProviderItem(itemId, providerId) : BookingItem
+        + rejectProviderItem(itemId, providerId) : BookingItem
+    }
+}
+
+' ============================================================
+' BLL
+' ============================================================
+package "Business Logic Layer" <<Rectangle>> #FFF9C4 {
+    interface BookingManager <<Orchestrator>> {
+        + addServiceToBooking(customerId, serviceId, date, time, qty) : BookingItem
+        + processPayment(bookingId, method) : void
+        + cancelBooking(bookingId) : void
+        + getCart(customerId) : Booking
+        + removeItemFromCart(itemId) : void
+        + applyVoucher(bookingId, voucherCode) : Booking
+        + getProviderItems(providerId) : List<BookingItem>
+        + confirmProviderItem(providerId, itemId) : BookingItem
+        + rejectProviderItem(providerId, itemId) : BookingItem
+        + getCustomerBookingHistory(customerId) : List<Booking>
+    }
+    class BookingManagerImpl {
+        - bookingService : BookingService
+        - paymentService : PaymentService
+        - voucherService : VoucherService
+        - availabilityService : AvailabilityService
+        - serviceService : ServiceService
+        - permissionService : PermissionService
+    }
+
+    interface BookingService {
+        + getOrCreatePendingCart(customerId) : Booking
+        + addItemToCart(bookingId, service, date, time, qty) : BookingItem
+        + removeItemFromCart(itemId) : void
+        + updateStatus(bookingId, status) : Booking
+        + applyDiscount(bookingId, code, amount) : Booking
+        + getBookingItemById(itemId) : BookingItem
+        + updateItemStatus(itemId, status) : BookingItem
+        + syncBookingStatus(bookingId) : void
+    }
+    class BookingServiceImpl {
+        - bookingRepository : BookingRepository
+        - bookingItemRepository : BookingItemRepository
+        - idGenerator : IdGeneratorService
+    }
+
+    interface PaymentService {
+        + createPaymentRecord(bookingId, method, type) : void
+        + getRefundableBalance(bookingId) : BigDecimal
+        + processRefund(bookingId, method, amount) : void
+        + createPartialRefund(bookingId, method, amount) : void
+    }
+    class PaymentServiceImpl {
+        - paymentRepository : PaymentRepository
+        - bookingRepository : BookingRepository
+    }
+
+    interface VoucherService {
+        + calculateDiscount(voucherCode) : BigDecimal
+    }
+    class VoucherServiceImpl
+
+    class BookingRequest <<DTO>> {
+        - customerId / serviceId
+        - bookedDate / startTime / quantity
+    }
+}
+
+' ============================================================
+' DAL
+' ============================================================
+package "Data Access Layer" <<Rectangle>> #FFCCBC {
+    interface BookingRepository <<JpaRepository>> {
+        + findFirstByCustomer_IdAndStatus(customerId, status) : Optional<Booking>
+        + findByCustomer_IdOrderByCreatedAtDesc(customerId) : List<Booking>
+    }
+    interface BookingItemRepository <<JpaRepository>> {
+        + findByBookingId(bookingId) : List<BookingItem>
+        + findByProviderId(providerId) : List<BookingItem>
+    }
+    interface PaymentRepository <<JpaRepository>> {
+        + findByBookingId(bookingId) : List<Payment>
+    }
+
+    class Booking <<@Entity>> {
+        - id : String
+        - customer : User
+        - voucherCode : String
+        - totalPrice : BigDecimal
+        - finalAmount : BigDecimal
+        - status : BookingStatus
+        - items : List<BookingItem>
+    }
+    class BookingItem <<@Entity>> {
+        - id : String
+        - booking : Booking
+        - service : Service
+        - bookedDate : LocalDate
+        - capturedName : String
+        - startTimeSnap : LocalTime
+        - quantity : Integer
+        - capturedPrice : BigDecimal
+        - status : ItemStatus
+    }
+    class Payment <<@Entity>> {
+        - id : String
+        - booking : Booking
+        - amount : BigDecimal
+        - type : PaymentType
+        - method : PaymentMethod
+    }
+
+    enum BookingStatus {
+        PENDING | SUCCESS | CANCELLED
+    }
+    enum ItemStatus {
+        PENDING | CONFIRMED | REJECTED | CANCELLED
+    }
+    enum PaymentType {
+        CHARGE | REFUND
+    }
+    enum PaymentMethod {
+        CASH | CREDIT_CARD | MOMO | ZALOPAY
+    }
+}
+
+' ============================================================
+' DATABASE
+' ============================================================
+package "Database (PostgreSQL)" <<Database>> #F3E5F5 {
+    entity "bookings" as bk_table {
+        * id <<PK>>
+        --
+        customer_id <<FK → users>>
+        voucher_code / total_price
+        final_amount / status
+    }
+    entity "booking_items" as bi_table {
+        * id <<PK>>
+        --
+        booking_id <<FK → bookings>>
+        service_id <<FK → services>>
+        booked_date / start_time_snap
+        quantity / captured_price / status
+    }
+    entity "payments" as pay_table {
+        * id <<PK>>
+        --
+        booking_id <<FK → bookings>>
+        amount / type / method
+    }
+
+    note bottom of bi_table
+        Trigger: auto-recalc
+        bookings.total_price
+    end note
+}
+
+' === RELATIONSHIPS ===
+CartPage --> BookingController : HTTP
+CheckoutPage --> BookingController : HTTP
+MyBookings --> BookingController : HTTP
+Orders --> BookingController : HTTP
+
+BookingController --> BookingManager
+BookingManager <|.. BookingManagerImpl
+BookingManagerImpl --> BookingService
+BookingManagerImpl --> PaymentService
+BookingManagerImpl --> VoucherService
+BookingService <|.. BookingServiceImpl
+PaymentService <|.. PaymentServiceImpl
+VoucherService <|.. VoucherServiceImpl
+
+BookingServiceImpl --> BookingRepository
+BookingServiceImpl --> BookingItemRepository
+PaymentServiceImpl --> PaymentRepository
+
+BookingRepository ..> Booking
+BookingItemRepository ..> BookingItem
+PaymentRepository ..> Payment
+Booking "1" *-- "*" BookingItem
+Booking "1" *-- "*" Payment
+Booking --> BookingStatus
+BookingItem --> ItemStatus
+Payment --> PaymentType
+Payment --> PaymentMethod
+
+Booking ..> bk_table : maps to
+BookingItem ..> bi_table : maps to
+Payment ..> pay_table : maps to
+
+@enduml

@@ -1,0 +1,170 @@
+@startuml SD08_Cancel_Booking
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-08: Cancel Booking & Refund**
+
+actor "Customer" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "BookingController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "BookingManager" as BLL_Mgr
+    participant "BookingService" as BLL_Book
+    participant "PaymentService" as BLL_Pay
+    participant "IdGeneratorService" as BLL_ID
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "BookingRepository" as DAL_Book
+    participant "BookingItemRepository" as DAL_Item
+    participant "PaymentRepository" as DAL_Pay
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Cancel Booking Flow ==
+
+GUI -> API : POST /api/bookings/{bookingId}/cancel
+activate API
+
+API -> BLL_Mgr : cancelBooking(bookingId)
+activate BLL_Mgr
+
+note right of BLL_Mgr : Step 1: Load booking & validate
+BLL_Mgr -> BLL_Book : getBookingById(bookingId)
+activate BLL_Book
+BLL_Book -> DAL_Book : findById(bookingId)
+activate DAL_Book
+DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+activate DB
+DB --> DAL_Book : Booking
+deactivate DB
+DAL_Book --> BLL_Book : Booking
+deactivate DAL_Book
+BLL_Book --> BLL_Mgr : Booking
+deactivate BLL_Book
+
+alt #FFE0E0 Status is PENDING (not yet paid)
+    BLL_Mgr --> API : throw RuntimeException\n("Order is unpaid. Please edit in cart.")
+    API --> GUI : 500 Internal Server Error
+
+else #E0FFE0 Status is PAID / SUCCESS (can cancel)
+
+    note right of BLL_Mgr : Step 2: Calculate refundable balance
+    BLL_Mgr -> BLL_Pay : getRefundableBalance(bookingId)
+    activate BLL_Pay
+    BLL_Pay -> DAL_Pay : findByBookingId(bookingId)
+    activate DAL_Pay
+    DAL_Pay -> DB : SELECT * FROM payments\nWHERE booking_id = ?
+    activate DB
+    DB --> DAL_Pay : List<Payment>
+    deactivate DB
+    DAL_Pay --> BLL_Pay : List<Payment>
+    deactivate DAL_Pay
+    BLL_Pay -> BLL_Pay : balance = SUM(all amounts)\n(PAY amounts are positive,\nREFUND amounts are negative)
+    BLL_Pay --> BLL_Mgr : refundableBalance
+    deactivate BLL_Pay
+
+    note right of BLL_Mgr : Step 3: Update booking status to CANCELLED
+    BLL_Mgr -> BLL_Book : updateStatus(bookingId, CANCELLED)
+    activate BLL_Book
+    BLL_Book -> DAL_Book : findById(bookingId)
+    activate DAL_Book
+    DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+    activate DB
+    DB --> DAL_Book : Booking
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+    BLL_Book -> BLL_Book : setStatus(CANCELLED)
+
+    BLL_Book -> DAL_Item : findByBookingId(bookingId)
+    activate DAL_Item
+    DAL_Item -> DB : SELECT * FROM booking_items\nWHERE booking_id = ?
+    activate DB
+    DB --> DAL_Item : List<BookingItem>
+    deactivate DB
+    DAL_Item --> BLL_Book : List<BookingItem>
+    deactivate DAL_Item
+
+    loop for each BookingItem
+        BLL_Book -> BLL_Book : item.setStatus(CANCELLED)
+        BLL_Book -> DAL_Item : save(item)
+        activate DAL_Item
+        DAL_Item -> DB : UPDATE booking_items\nSET status = 'CANCELLED'
+        activate DB
+        DB --> DAL_Item : updated
+        deactivate DB
+        DAL_Item --> BLL_Book : BookingItem
+        deactivate DAL_Item
+    end
+
+    BLL_Book -> DAL_Book : saveAndFlush(booking)
+    activate DAL_Book
+    DAL_Book -> DB : UPDATE bookings\nSET status = 'CANCELLED'
+    activate DB
+    DB --> DAL_Book : updated
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+    BLL_Book -> BLL_Book : entityManager.refresh(booking)
+    BLL_Book --> BLL_Mgr : Booking (CANCELLED)
+    deactivate BLL_Book
+
+    note right of BLL_Mgr : Step 4: Smart refund logic
+    alt #FFFDE7 balance > 0 (customer has remaining funds)
+
+        BLL_Mgr -> BLL_Mgr : check if within 24 hours\nof booking creation
+
+        alt #E0FFE0 Within 24-hour refund window
+            BLL_Mgr -> BLL_Pay : processRefund(bookingId,\nBANK_TRANSFER, balance)
+            activate BLL_Pay
+            BLL_Pay -> DAL_Book : findById(bookingId)
+            activate DAL_Book
+            DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+            activate DB
+            DB --> DAL_Book : Booking
+            deactivate DB
+            DAL_Book --> BLL_Pay : Booking
+            deactivate DAL_Book
+
+            BLL_Pay -> BLL_ID : generateId("REF", "payment_seq")
+            activate BLL_ID
+            BLL_ID --> BLL_Pay : "REF00001"
+            deactivate BLL_ID
+
+            BLL_Pay -> BLL_Pay : create Payment\namount = balance.negate()\ntype = REFUND
+
+            BLL_Pay -> DAL_Pay : save(refundPayment)
+            activate DAL_Pay
+            DAL_Pay -> DB : INSERT INTO payments\n(id, booking_id, amount=-X, type='REFUND')
+            activate DB
+            DB --> DAL_Pay : Payment
+            deactivate DB
+            DAL_Pay --> BLL_Pay : Payment
+            deactivate DAL_Pay
+
+            BLL_Pay --> BLL_Mgr : void
+            deactivate BLL_Pay
+
+        else #FFE0E0 Outside 24-hour window
+            note right of BLL_Mgr : No refund issued\n(policy: > 24 hours)
+        end
+
+    else balance <= 0
+        note right of BLL_Mgr : No refund needed\n(all items were already refunded)
+    end
+
+    BLL_Mgr --> API : void
+    deactivate BLL_Mgr
+    API --> GUI : 200 OK\n("Order cancelled. Refund processed if eligible.")
+end
+
+deactivate API
+
+@enduml

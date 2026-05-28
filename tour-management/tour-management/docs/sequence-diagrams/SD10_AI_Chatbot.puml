@@ -1,0 +1,107 @@
+@startuml SD10_AI_Chatbot
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-10: AI Chatbot Interaction (Gemini + Function Calling)**
+
+actor "User" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "AiController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "ChatClient\n(Gemini)" as BLL_AI
+    participant "ChatMemory" as BLL_Mem
+    participant "AiFunctionConfig\n(Spring AI Beans)" as BLL_Func
+    participant "ServiceService\nBookingManager\nFeedbackService\n..." as BLL_Svc
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "Repositories" as DAL
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== AI Chat Flow ==
+
+GUI -> API : GET /api/ai/chat\n?message=...&userId=USER001&role=CUSTOMER
+activate API
+
+API -> API : Build userContext:\n"[System context: User ID=USER001, role=CUSTOMER]"
+
+API -> BLL_AI : prompt(message + userContext)\n.advisors(ChatMemory, userId)\n.call()
+activate BLL_AI
+
+BLL_AI -> BLL_Mem : load conversation history\nfor userId
+activate BLL_Mem
+BLL_Mem --> BLL_AI : previous messages
+deactivate BLL_Mem
+
+BLL_AI -> BLL_AI : Send to Gemini API\n(with system prompt +\nconversation history +\nfunction definitions)
+
+opt #E8EAF6 Gemini decides to call a function (Function Calling)
+    BLL_AI -> BLL_Func : invoke function\ne.g. searchTours({q: "Ha Long"})
+    activate BLL_Func
+    BLL_Func -> BLL_Svc : searchServices("Ha Long")
+    activate BLL_Svc
+    BLL_Svc -> DAL : search query
+    activate DAL
+    DAL -> DB : SELECT * FROM services\nWHERE to_tsvector(...)\n@@ to_tsquery(...)
+    activate DB
+    DB --> DAL : List<Service>
+    deactivate DB
+    DAL --> BLL_Svc : results
+    deactivate DAL
+    BLL_Svc --> BLL_Func : List<Service>
+    deactivate BLL_Svc
+    BLL_Func --> BLL_AI : function result (JSON)
+    deactivate BLL_Func
+
+    BLL_AI -> BLL_AI : Gemini processes\nfunction result\n→ generates natural\nlanguage response
+end
+
+BLL_AI -> BLL_Mem : save new messages\nto conversation history
+activate BLL_Mem
+BLL_Mem --> BLL_AI : saved
+deactivate BLL_Mem
+
+BLL_AI --> API : response content (String)
+deactivate BLL_AI
+
+API --> GUI : 200 OK (AI response text)
+deactivate API
+
+== Error Recovery Flow ==
+
+GUI -> API : GET /api/ai/chat?message=...
+activate API
+
+API -> BLL_AI : prompt(message + context)\n.advisors(ChatMemory)\n.call()
+activate BLL_AI
+
+BLL_AI -> BLL_Mem : load history
+activate BLL_Mem
+BLL_Mem --> BLL_AI : corrupted JSON data
+deactivate BLL_Mem
+
+BLL_AI --> API : throw Exception\n(memory parse error)
+deactivate BLL_AI
+
+API -> BLL_Mem : clear(userId)
+activate BLL_Mem
+note right of BLL_Mem : Wipe corrupted\nconversation data
+BLL_Mem --> API : cleared
+deactivate BLL_Mem
+
+API -> BLL_AI : prompt(message + context)\n.call() (no advisor/memory)
+activate BLL_AI
+BLL_AI --> API : fresh response
+deactivate BLL_AI
+
+API --> GUI : 200 OK\n("Memory was refreshed.\nPlease ask again!\n" + fresh response)
+deactivate API
+
+@enduml

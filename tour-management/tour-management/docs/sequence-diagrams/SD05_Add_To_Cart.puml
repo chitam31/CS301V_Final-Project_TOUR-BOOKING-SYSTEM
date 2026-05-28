@@ -1,0 +1,150 @@
+@startuml SD05_Add_To_Cart
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-05: Customer Adds Service to Cart**
+
+actor "Customer" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "BookingController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "BookingManager" as BLL_Mgr
+    participant "AvailabilityService" as BLL_Avail
+    participant "ServiceService" as BLL_Svc
+    participant "BookingService" as BLL_Book
+    participant "IdGeneratorService" as BLL_ID
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "AvailabilityRepository" as DAL_Avail
+    participant "ServiceRepository" as DAL_Svc
+    participant "BookingRepository" as DAL_Book
+    participant "BookingItemRepository" as DAL_Item
+    participant "UserRepository" as DAL_User
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Add to Cart Flow ==
+
+GUI -> API : POST /api/bookings/add-item\n(customerId, serviceId, bookedDate, startTime, quantity)
+activate API
+
+API -> BLL_Mgr : addServiceToBooking(customerId, serviceId, date, time, qty)
+activate BLL_Mgr
+
+note right of BLL_Mgr : Step 1: Check slot availability
+BLL_Mgr -> BLL_Avail : checkAvailability(serviceId, date, time, qty)
+activate BLL_Avail
+BLL_Avail -> BLL_Avail : getRemainingSeats(serviceId, date, time)
+BLL_Avail -> DAL_Avail : getAvailableSlotsForDate(serviceId, date)
+activate DAL_Avail
+DAL_Avail -> DB : SELECT ss.start_time, ss.max_capacity,\nCOALESCE(SUM(bi.quantity), 0) as booked\nFROM service_slots ss\nLEFT JOIN booking_items bi ...\nGROUP BY ss.id\n**(Uses SQL View)**
+activate DB
+DB --> DAL_Avail : List<SlotAvailabilityDTO>
+deactivate DB
+DAL_Avail --> BLL_Avail : List<SlotAvailabilityDTO>
+deactivate DAL_Avail
+BLL_Avail -> BLL_Avail : filter by startTime\n→ remainingSeats >= qty ?
+BLL_Avail --> BLL_Mgr : boolean (available)
+deactivate BLL_Avail
+
+alt #FFE0E0 No seats available
+    BLL_Mgr --> API : throw RuntimeException\n("This time slot is fully booked!")
+    API --> GUI : 500 Internal Server Error
+
+else #E0FFE0 Seats available
+
+    note right of BLL_Mgr : Step 2: Get service info for Snapshot
+    BLL_Mgr -> BLL_Svc : getServiceById(serviceId)
+    activate BLL_Svc
+    BLL_Svc -> DAL_Svc : findById(serviceId)
+    activate DAL_Svc
+    DAL_Svc -> DB : SELECT * FROM services WHERE id = ?
+    activate DB
+    DB --> DAL_Svc : Service
+    deactivate DB
+    DAL_Svc --> BLL_Svc : Service
+    deactivate DAL_Svc
+    BLL_Svc --> BLL_Mgr : originalService
+    deactivate BLL_Svc
+
+    note right of BLL_Mgr : Step 3: Find or create PENDING cart
+    BLL_Mgr -> BLL_Book : getOrCreatePendingCart(customerId)
+    activate BLL_Book
+    BLL_Book -> DAL_Book : findFirstByCustomer_IdAndStatus\n(customerId, PENDING)
+    activate DAL_Book
+    DAL_Book -> DB : SELECT * FROM bookings\nWHERE customer_id = ? AND status = 'PENDING'\nLIMIT 1
+    activate DB
+    DB --> DAL_Book : Optional<Booking>
+    deactivate DB
+    DAL_Book --> BLL_Book : Optional<Booking>
+    deactivate DAL_Book
+
+    opt #FFFDE7 No existing cart found
+        BLL_Book -> BLL_ID : generateId("BK", "booking_seq")
+        activate BLL_ID
+        BLL_ID --> BLL_Book : "BK00001"
+        deactivate BLL_ID
+        BLL_Book -> DAL_User : findById(customerId)
+        activate DAL_User
+        DAL_User -> DB : SELECT * FROM users WHERE id = ?
+        activate DB
+        DB --> DAL_User : User
+        deactivate DB
+        DAL_User --> BLL_Book : User (customer)
+        deactivate DAL_User
+        BLL_Book -> DAL_Book : save(newBooking)
+        activate DAL_Book
+        DAL_Book -> DB : INSERT INTO bookings\n(id, customer_id, status='PENDING')
+        activate DB
+        DB --> DAL_Book : Booking
+        deactivate DB
+        DAL_Book --> BLL_Book : Booking
+        deactivate DAL_Book
+    end
+
+    BLL_Book --> BLL_Mgr : cart (Booking)
+    deactivate BLL_Book
+
+    note right of BLL_Mgr : Step 4: Snapshot & save BookingItem
+    BLL_Mgr -> BLL_Book : addItemToCart(cartId, originalService, date, time, qty)
+    activate BLL_Book
+    BLL_Book -> BLL_ID : generateId("BIT", "item_seq")
+    activate BLL_ID
+    BLL_ID --> BLL_Book : "BIT00001"
+    deactivate BLL_ID
+    BLL_Book -> BLL_Book : Snapshot:\ncapturedName = service.name\ncapturedPrice = service.price\nstatus = PENDING_PROVIDER
+    BLL_Book -> DAL_Item : save(bookingItem)
+    activate DAL_Item
+    DAL_Item -> DB : INSERT INTO booking_items\n(id, booking_id, service_id, captured_name,\ncaptured_price, quantity, booked_date, ...)
+    activate DB
+    DB --> DAL_Item : BookingItem
+    deactivate DB
+    DAL_Item --> BLL_Book : BookingItem
+    deactivate DAL_Item
+
+    BLL_Book -> BLL_Book : entityManager.flush()
+    BLL_Book -> DB : **DB Trigger fires:**\nRecalculate booking.total_price\n= SUM(captured_price * quantity)
+    activate DB
+    DB --> BLL_Book : trigger completed
+    deactivate DB
+    BLL_Book -> BLL_Book : entityManager.refresh(booking)
+
+    BLL_Book --> BLL_Mgr : BookingItem (with synced price)
+    deactivate BLL_Book
+
+    BLL_Mgr --> API : BookingItem
+    deactivate BLL_Mgr
+
+    API --> GUI : 200 OK (BookingItem JSON)
+end
+
+deactivate API
+
+@enduml

@@ -1,0 +1,125 @@
+@startuml SD06_Process_Payment
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-06: Process Payment for Booking**
+
+actor "Customer" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "BookingController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "BookingManager" as BLL_Mgr
+    participant "BookingService" as BLL_Book
+    participant "PaymentService" as BLL_Pay
+    participant "IdGeneratorService" as BLL_ID
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "BookingRepository" as DAL_Book
+    participant "PaymentRepository" as DAL_Pay
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Payment Flow ==
+
+GUI -> API : POST /api/bookings/{bookingId}/pay\n?method=MOMO|BANK_TRANSFER|CASH
+activate API
+
+API -> BLL_Mgr : processPayment(bookingId, method)
+activate BLL_Mgr
+
+note right of BLL_Mgr : Step 1: Load booking & validate
+BLL_Mgr -> BLL_Book : getBookingById(bookingId)
+activate BLL_Book
+BLL_Book -> DAL_Book : findById(bookingId)
+activate DAL_Book
+DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+activate DB
+DB --> DAL_Book : Booking
+deactivate DB
+DAL_Book --> BLL_Book : Booking
+deactivate DAL_Book
+BLL_Book --> BLL_Mgr : Booking
+deactivate BLL_Book
+
+BLL_Mgr -> BLL_Mgr : check booking.status
+
+alt #FFE0E0 Already PAID or SUCCESS
+    BLL_Mgr --> API : throw RuntimeException\n("This order has already been paid!")
+    API --> GUI : 500 Internal Server Error
+
+else #E0FFE0 Status is PENDING (valid for payment)
+
+    note right of BLL_Mgr : Step 2: Update status to PAID
+    BLL_Mgr -> BLL_Book : updateStatus(bookingId, PAID)
+    activate BLL_Book
+    BLL_Book -> DAL_Book : findById(bookingId)
+    activate DAL_Book
+    DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+    activate DB
+    DB --> DAL_Book : Booking
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+    BLL_Book -> BLL_Book : setStatus(PAID)
+    BLL_Book -> DAL_Book : saveAndFlush(booking)
+    activate DAL_Book
+    DAL_Book -> DB : UPDATE bookings SET status = 'PAID'\nWHERE id = ?
+    activate DB
+    DB --> DAL_Book : updated
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+    BLL_Book -> BLL_Book : entityManager.refresh(booking)\n(sync final_amount from trigger)
+    BLL_Book --> BLL_Mgr : Booking (status=PAID)
+    deactivate BLL_Book
+
+    note right of BLL_Mgr : Step 3: Create payment record
+    BLL_Mgr -> BLL_Mgr : parse method string\n→ PaymentMethod enum
+    BLL_Mgr -> BLL_Pay : createPaymentRecord(bookingId,\nmethod, PAY)
+    activate BLL_Pay
+    BLL_Pay -> DAL_Book : findById(bookingId)
+    activate DAL_Book
+    DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+    activate DB
+    DB --> DAL_Book : Booking
+    deactivate DB
+    DAL_Book --> BLL_Pay : Booking
+    deactivate DAL_Book
+
+    BLL_Pay -> BLL_Pay : entityManager.refresh(booking)\n(ensure fresh final_amount)
+
+    BLL_Pay -> BLL_ID : generateId("PAY", "payment_seq")
+    activate BLL_ID
+    BLL_ID --> BLL_Pay : "PAY00001"
+    deactivate BLL_ID
+
+    BLL_Pay -> BLL_Pay : create Payment object\namount = booking.finalAmount\ntype = PAY
+
+    BLL_Pay -> DAL_Pay : save(payment)
+    activate DAL_Pay
+    DAL_Pay -> DB : INSERT INTO payments\n(id, booking_id, amount, type='PAY', method)
+    activate DB
+    DB --> DAL_Pay : Payment
+    deactivate DB
+    DAL_Pay --> BLL_Pay : Payment
+    deactivate DAL_Pay
+
+    BLL_Pay --> BLL_Mgr : void
+    deactivate BLL_Pay
+
+    BLL_Mgr --> API : void
+    deactivate BLL_Mgr
+
+    API --> GUI : 200 OK\n("Payment successful via {method}")
+end
+
+deactivate API
+
+@enduml

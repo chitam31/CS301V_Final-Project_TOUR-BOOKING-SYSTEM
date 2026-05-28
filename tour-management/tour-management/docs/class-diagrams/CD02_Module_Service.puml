@@ -1,0 +1,166 @@
+@startuml CD02_Module_Service
+title Module 2: Service Management
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+' ============================================================
+' GUI
+' ============================================================
+package "GUI (React Frontend)" <<Rectangle>> #E3F2FD {
+    class Home {
+        + renderServiceCards()
+        + handleSearch()
+    }
+    class SearchResults {
+        + renderFilteredList()
+    }
+    class ServiceDetail {
+        + renderDetail()
+    }
+    class Dashboard {
+        + renderStats()
+    }
+    class MyServices {
+        + manageCRUD()
+    }
+}
+
+' ============================================================
+' API
+' ============================================================
+package "API Layer" <<Rectangle>> #C8E6C9 {
+    class ServiceController <<@RestController>> {
+        - serviceService : ServiceService
+        --
+        + createService(service) : Service
+        + updateService(id, providerId, details) : Service
+        + deleteService(id, providerId) : void
+        + restoreService(id, providerId) : void
+        + addMemberToCombo(parentId, serviceId, providerId) : Service
+        + getAllServices() : List<ServiceResponseDTO>
+        + search(q) : List<Service>
+        + getServiceById(id) : Service
+        + getServicesByProvider(providerId) : List<Service>
+        + getSubServices(id) : List<Service>
+        + getProviderDashboard(providerId) : ProviderDashboardDTO
+    }
+}
+
+' ============================================================
+' BLL
+' ============================================================
+package "Business Logic Layer" <<Rectangle>> #FFF9C4 {
+    interface ServiceService {
+        + createService(service) : Service
+        + updateService(providerId, serviceId, details) : Service
+        + deleteService(providerId, serviceId) : void
+        + restoreService(providerId, serviceId) : void
+        + addExistingToCombo(providerId, serviceId, parentId) : Service
+        + getAllServicesWithRatings() : List<ServiceResponseDTO>
+        + searchServices(query) : List<Service>
+        + getServiceById(id) : Service
+        + getServicesByProvider(providerId) : List<Service>
+        + getSubServices(parentId) : List<Service>
+        + getProviderDashboard(providerId) : ProviderDashboardDTO
+    }
+    class ServiceServiceImpl {
+        - serviceRepository : ServiceRepository
+        - permissionService : PermissionService
+        - idGenerator : IdGeneratorService
+    }
+
+    interface PermissionService {
+        + isProvider(userId) : void
+        + canManageService(providerId, serviceId) : void
+    }
+    class PermissionServiceImpl {
+        - userRepository : UserRepository
+        - serviceRepository : ServiceRepository
+    }
+
+    class ServiceResponseDTO <<DTO>> {
+        - id / name / imageUrl
+        - price / duration / category
+        - avgRating / reviewCount
+    }
+    class ProviderDashboardDTO <<DTO>> {
+        - providerId / businessName
+        - totalServices / totalBookings
+        - totalRevenue / averageRating
+    }
+}
+
+' ============================================================
+' DAL
+' ============================================================
+package "Data Access Layer" <<Rectangle>> #FFCCBC {
+    interface ServiceRepository <<JpaRepository>> {
+        + findByIsActiveTrue() : List<Service>
+        + findByProviderId(providerId) : List<Service>
+        + findByParentId(parentId) : List<Service>
+        + findAllServicesWithRatings() : List<Object[]>
+        + searchServices(keyword) : List<Service>
+        + getProviderDashboardStats(pid) : List<Object[]>
+    }
+
+    class Service <<@Entity>> {
+        - id : String
+        - provider : User
+        - parent : Service
+        - subServices : List<Service>
+        - name / imageUrl / description
+        - price : BigDecimal
+        - duration : String
+        - category : ServiceCategory
+        - type : ServiceType
+        - isActive : Boolean
+        - createdAt : LocalDateTime
+    }
+    enum ServiceCategory {
+        TOUR | HOTEL | TICKET | RESTAURANT
+    }
+    enum ServiceType {
+        SINGLE | COMBO
+    }
+}
+
+' ============================================================
+' DATABASE
+' ============================================================
+package "Database (PostgreSQL)" <<Database>> #F3E5F5 {
+    entity "services" as svc_table {
+        * id : VARCHAR <<PK>>
+        --
+        provider_id <<FK → users>>
+        parent_id <<FK → services>>
+        name / image_url / description
+        price / duration
+        category / type <<ENUM>>
+        is_active : BOOLEAN
+    }
+    entity "v_provider_dashboard" as v_dash {
+        <<View>>
+    }
+}
+
+' === RELATIONSHIPS ===
+Home --> ServiceController : HTTP GET
+SearchResults --> ServiceController : HTTP GET
+ServiceDetail --> ServiceController : HTTP GET
+Dashboard --> ServiceController : HTTP GET
+MyServices --> ServiceController : HTTP POST/PUT/DELETE
+
+ServiceController --> ServiceService
+ServiceService <|.. ServiceServiceImpl
+ServiceServiceImpl --> PermissionService
+PermissionService <|.. PermissionServiceImpl
+ServiceServiceImpl --> ServiceRepository
+ServiceRepository ..> Service
+Service --> ServiceCategory
+Service --> ServiceType
+Service --> Service : parent
+Service ..> svc_table : maps to
+ServiceRepository ..> v_dash : queries
+
+@enduml

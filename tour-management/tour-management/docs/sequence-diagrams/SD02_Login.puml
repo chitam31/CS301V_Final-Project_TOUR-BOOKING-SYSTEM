@@ -1,0 +1,68 @@
+@startuml SD02_Login
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-02: User Login**
+
+actor "User" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "UserController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "AuthService" as BLL_Auth
+    participant "PasswordUtils" as BLL_PW
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "UserRepository" as DAL
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Login Flow ==
+
+GUI -> API : POST /api/auth/login\n(username, password)
+activate API
+
+API -> BLL_Auth : login(username, password)
+activate BLL_Auth
+
+BLL_Auth -> DAL : findByUsername(username)
+activate DAL
+DAL -> DB : SELECT * FROM users\nWHERE username = ?
+activate DB
+DB --> DAL : result
+deactivate DB
+DAL --> BLL_Auth : Optional<User>
+deactivate DAL
+
+alt #FFE0E0 User not found
+    BLL_Auth --> API : throw RuntimeException\n("Username does not exist!")
+    API --> GUI : 500 Internal Server Error
+
+else #E0FFE0 User found
+    BLL_Auth -> BLL_PW : hashPassword(inputPassword)
+    activate BLL_PW
+    BLL_PW --> BLL_Auth : inputHashed (SHA-256)
+    deactivate BLL_PW
+
+    BLL_Auth -> BLL_Auth : compare inputHashed\nvs storedPassword
+
+    alt #FFE0E0 Password mismatch
+        BLL_Auth --> API : throw RuntimeException\n("Incorrect password!")
+        API --> GUI : 500 Internal Server Error
+
+    else #E0FFE0 Password matches
+        BLL_Auth --> API : User
+        deactivate BLL_Auth
+        API --> GUI : 200 OK (User JSON)
+    end
+end
+
+deactivate API
+
+@enduml

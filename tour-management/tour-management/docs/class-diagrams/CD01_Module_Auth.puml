@@ -1,0 +1,123 @@
+@startuml CD01_Module_Auth
+title Module 1: Auth / Session
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+' ============================================================
+' GUI
+' ============================================================
+package "GUI (React Frontend)" <<Rectangle>> #E3F2FD {
+    class LoginModal {
+        + handleLogin()
+    }
+    class RegisterModal {
+        + handleRegisterCustomer()
+        + handleRegisterProvider()
+    }
+}
+
+' ============================================================
+' API
+' ============================================================
+package "API Layer" <<Rectangle>> #C8E6C9 {
+    class UserController <<@RestController>> {
+        - authService : AuthService
+        --
+        + registerCustomer(user: User) : User
+        + registerProvider(user: User) : User
+        + login(loginRequest: User) : User
+    }
+}
+
+' ============================================================
+' BLL
+' ============================================================
+package "Business Logic Layer" <<Rectangle>> #FFF9C4 {
+    interface AuthService {
+        + register(user: User, type: String) : User
+        + login(username: String, password: String) : User
+    }
+    class AuthServiceImpl {
+        - userService : UserService
+        - userRepository : UserRepository
+        + register(user: User, type: String) : User
+        + login(username: String, password: String) : User
+    }
+
+    interface UserService {
+        + saveUser(user: User, prefix: String) : User
+        + existsByUsername(username: String) : boolean
+    }
+    class UserServiceImpl {
+        - userRepository : UserRepository
+        - idGenerator : IdGeneratorService
+        + saveUser(user: User, prefix: String) : User
+        + existsByUsername(username: String) : boolean
+    }
+
+    class PasswordUtils <<Utility>> {
+        + {static} hashPassword(password: String) : String
+    }
+    class IdGeneratorService {
+        + generateId(prefix: String, seqName: String) : String
+    }
+}
+
+' ============================================================
+' DAL
+' ============================================================
+package "Data Access Layer" <<Rectangle>> #FFCCBC {
+    interface UserRepository <<JpaRepository>> {
+        + findByUsername(username: String) : Optional<User>
+        + existsByUsername(username: String) : boolean
+        + save(user: User) : User
+    }
+
+    class User <<@Entity>> {
+        - id : String
+        - username : String
+        - password : String
+        - role : UserRole
+        - phone : String
+        - email : String
+        - businessName : String
+        - createdAt : LocalDateTime
+    }
+    enum UserRole {
+        CUSTOMER
+        PROVIDER
+    }
+}
+
+' ============================================================
+' DATABASE
+' ============================================================
+package "Database (PostgreSQL)" <<Database>> #F3E5F5 {
+    entity "users" as users_table {
+        * id : VARCHAR <<PK>>
+        --
+        username : VARCHAR <<UNIQUE>>
+        password_hashed : VARCHAR
+        role : user_role
+        phone / email / business_name
+        created_at : TIMESTAMP
+    }
+}
+
+' === RELATIONSHIPS ===
+LoginModal --> UserController : HTTP POST
+RegisterModal --> UserController : HTTP POST
+UserController --> AuthService
+AuthService <|.. AuthServiceImpl
+AuthServiceImpl --> UserService
+AuthServiceImpl --> PasswordUtils
+UserService <|.. UserServiceImpl
+UserServiceImpl --> IdGeneratorService
+AuthServiceImpl --> UserRepository
+UserServiceImpl --> UserRepository
+UserRepository ..> User
+User --> UserRole
+User ..> users_table : maps to
+
+@enduml

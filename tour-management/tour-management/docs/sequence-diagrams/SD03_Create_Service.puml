@@ -1,0 +1,111 @@
+@startuml SD03_Create_Service
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-03: Provider Creates a New Service (Single / Combo)**
+
+actor "Provider" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "ServiceController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "ServiceService" as BLL
+    participant "PermissionService" as BLL_Perm
+    participant "IdGeneratorService" as BLL_ID
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "ServiceRepository" as DAL
+    participant "UserRepository" as DAL_User
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Create Service Flow ==
+
+GUI -> API : POST /api/services/create\n(name, price, type, providerId, parentId?, ...)
+activate API
+
+API -> BLL : createService(service)
+activate BLL
+
+note right of BLL : Step 1: Verify provider role
+BLL -> BLL_Perm : isProvider(providerId)
+activate BLL_Perm
+BLL_Perm -> DAL_User : findById(providerId)
+activate DAL_User
+DAL_User -> DB : SELECT * FROM users WHERE id = ?
+activate DB
+DB --> DAL_User : User
+deactivate DB
+DAL_User --> BLL_Perm : User
+deactivate DAL_User
+BLL_Perm -> BLL_Perm : check role == PROVIDER
+BLL_Perm --> BLL : void (passed)
+deactivate BLL_Perm
+
+opt #FFFDE7 Service has a parent (adding sub-service to Combo)
+    note right of BLL : Step 2: Validate parent Combo
+    BLL -> BLL_Perm : canManageService(providerId, parentId)
+    activate BLL_Perm
+    BLL_Perm -> DAL : findById(parentId)
+    activate DAL
+    DAL -> DB : SELECT * FROM services WHERE id = ?
+    activate DB
+    DB --> DAL : Service
+    deactivate DB
+    DAL --> BLL_Perm : Service
+    deactivate DAL
+    BLL_Perm -> BLL_Perm : check provider ownership
+    BLL_Perm --> BLL : void (passed)
+    deactivate BLL_Perm
+
+    BLL -> DAL : findById(parentId)
+    activate DAL
+    DAL -> DB : SELECT * FROM services WHERE id = ?
+    activate DB
+    DB --> DAL : parent Service
+    deactivate DB
+    DAL --> BLL : parent Service
+    deactivate DAL
+
+    BLL -> BLL : validate parent.type == COMBO
+
+    alt #FFE0E0 Parent is not COMBO
+        BLL --> API : throw RuntimeException\n("Can only add sub-service to a COMBO")
+        API --> GUI : 500 Internal Server Error
+    end
+end
+
+note right of BLL : Step 3: Generate ID & Save
+BLL -> BLL_ID : generateId("SERV", "service_seq")
+activate BLL_ID
+BLL_ID -> DB : SELECT nextval('service_seq')
+activate DB
+DB --> BLL_ID : sequence value
+deactivate DB
+BLL_ID --> BLL : "SERV00001"
+deactivate BLL_ID
+
+BLL -> BLL : setId, setIsActive(true)
+
+BLL -> DAL : save(service)
+activate DAL
+DAL -> DB : INSERT INTO services\n(id, name, price, type, provider_id, parent_id, ...)
+activate DB
+DB --> DAL : saved entity
+deactivate DB
+DAL --> BLL : Service
+deactivate DAL
+
+BLL --> API : Service
+deactivate BLL
+
+API --> GUI : 200 OK (Service JSON)
+deactivate API
+
+@enduml

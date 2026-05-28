@@ -1,0 +1,120 @@
+@startuml CD03_Module_ServiceSlot
+title Module 3: ServiceSlot & Availability
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+' ============================================================
+' GUI
+' ============================================================
+package "GUI (React Frontend)" <<Rectangle>> #E3F2FD {
+    class ServiceDetail {
+        + renderSlotPicker()
+        + showRemainingSeats()
+    }
+    class ManageSlots {
+        + createSlot()
+        + editSlot()
+        + deleteSlot()
+    }
+}
+
+' ============================================================
+' API
+' ============================================================
+package "API Layer" <<Rectangle>> #C8E6C9 {
+    class ServiceSlotController <<@RestController>> {
+        - slotService : ServiceSlotService
+        --
+        + createSlot(serviceId, providerId, slot) : ServiceSlot
+        + updateSlot(slotId, providerId, details) : ServiceSlot
+        + deleteSlot(slotId, providerId) : void
+        + restoreSlot(slotId, providerId) : void
+        + getSlotsByService(serviceId) : List<ServiceSlot>
+    }
+}
+
+' ============================================================
+' BLL
+' ============================================================
+package "Business Logic Layer" <<Rectangle>> #FFF9C4 {
+    interface ServiceSlotService {
+        + createSlot(providerId, serviceId, slot) : ServiceSlot
+        + updateSlot(providerId, slotId, details) : ServiceSlot
+        + deleteSlot(providerId, slotId) : void
+        + restoreSlot(providerId, slotId) : void
+        + getSlotsByService(serviceId) : List<ServiceSlot>
+    }
+    class ServiceSlotServiceImpl {
+        - slotRepository : ServiceSlotRepository
+        - permissionService : PermissionService
+        - idGenerator : IdGeneratorService
+    }
+
+    interface AvailabilityService {
+        + checkAvailability(serviceId, date, startTime, qty) : boolean
+        + getRemainingSeats(serviceId, date, startTime) : Integer
+        + getAvailableSlotsForDate(serviceId, date) : List<SlotAvailabilityDTO>
+    }
+    class AvailabilityServiceImpl {
+        - availabilityRepository : AvailabilityRepository
+    }
+
+    interface SlotAvailabilityDTO <<Projection>> {
+        + getSlotId() : String
+        + getStartTime() : LocalTime
+        + getMaxCapacity() : Integer
+        + getTotalBooked() : Integer
+        + getRemainingSeats() : Integer
+    }
+}
+
+' ============================================================
+' DAL
+' ============================================================
+package "Data Access Layer" <<Rectangle>> #FFCCBC {
+    interface ServiceSlotRepository <<JpaRepository>> {
+        + findByServiceIdAndActiveTrue(serviceId) : List<ServiceSlot>
+    }
+
+    interface AvailabilityRepository <<JpaRepository>> {
+        + getAvailableSlotsForDate(serviceId, date) : List<SlotAvailabilityDTO>
+    }
+
+    class ServiceSlot <<@Entity>> {
+        - id : String
+        - service : Service
+        - startTime : LocalTime
+        - maxCapacity : Integer
+        - active : Boolean
+    }
+}
+
+' ============================================================
+' DATABASE
+' ============================================================
+package "Database (PostgreSQL)" <<Database>> #F3E5F5 {
+    entity "service_slots" as slot_table {
+        * id : VARCHAR <<PK>>
+        --
+        service_id <<FK → services>>
+        start_time : TIME
+        max_capacity : INTEGER
+        active : BOOLEAN
+    }
+}
+
+' === RELATIONSHIPS ===
+ServiceDetail --> ServiceSlotController : HTTP GET
+ManageSlots --> ServiceSlotController : HTTP POST/PUT/DELETE
+
+ServiceSlotController --> ServiceSlotService
+ServiceSlotService <|.. ServiceSlotServiceImpl
+AvailabilityService <|.. AvailabilityServiceImpl
+ServiceSlotServiceImpl --> ServiceSlotRepository
+AvailabilityServiceImpl --> AvailabilityRepository
+AvailabilityRepository ..> SlotAvailabilityDTO : returns
+ServiceSlotRepository ..> ServiceSlot
+ServiceSlot ..> slot_table : maps to
+
+@enduml

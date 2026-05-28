@@ -1,0 +1,148 @@
+@startuml SD09_Provider_Confirm_Reject
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-09: Provider Confirms / Rejects Booking Item**
+
+actor "Provider" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "BookingController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "BookingManager" as BLL_Mgr
+    participant "BookingService" as BLL_Book
+    participant "PermissionService" as BLL_Perm
+    participant "PaymentService" as BLL_Pay
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "BookingItemRepository" as DAL_Item
+    participant "BookingRepository" as DAL_Book
+    participant "PaymentRepository" as DAL_Pay
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Confirm / Reject Flow ==
+
+GUI -> API : POST /api/bookings/items/{itemId}/confirm\nor /reject ?providerId=PROV00001
+activate API
+
+API -> BLL_Mgr : confirmProviderItem(providerId, itemId)\nor rejectProviderItem(providerId, itemId)
+activate BLL_Mgr
+
+note right of BLL_Mgr : Step 1: Load item & verify ownership
+BLL_Mgr -> BLL_Book : getBookingItemById(itemId)
+activate BLL_Book
+BLL_Book -> DAL_Item : findById(itemId)
+activate DAL_Item
+DAL_Item -> DB : SELECT * FROM booking_items\nWHERE id = ?
+activate DB
+DB --> DAL_Item : BookingItem
+deactivate DB
+DAL_Item --> BLL_Book : BookingItem
+deactivate DAL_Item
+BLL_Book --> BLL_Mgr : BookingItem
+deactivate BLL_Book
+
+BLL_Mgr -> BLL_Perm : canManageService(providerId, item.service.id)
+activate BLL_Perm
+BLL_Perm -> DB : Verify user role = PROVIDER\n& service ownership
+activate DB
+DB --> BLL_Perm : verified
+deactivate DB
+BLL_Perm --> BLL_Mgr : void (authorized)
+deactivate BLL_Perm
+
+note right of BLL_Mgr : Step 2: Update item status
+BLL_Mgr -> BLL_Book : updateItemStatus(itemId, CONFIRMED/REJECTED)
+activate BLL_Book
+BLL_Book -> DAL_Item : save(item)
+activate DAL_Item
+DAL_Item -> DB : UPDATE booking_items\nSET status = 'CONFIRMED'/'REJECTED'
+activate DB
+DB --> DAL_Item : updated
+deactivate DB
+DAL_Item --> BLL_Book : BookingItem
+deactivate DAL_Item
+BLL_Book -> BLL_Book : flush() & refresh(booking)
+BLL_Book --> BLL_Mgr : updatedItem
+deactivate BLL_Book
+
+note right of BLL_Mgr : Step 3: Sync parent booking status
+BLL_Mgr -> BLL_Book : syncBookingStatus(bookingId)
+activate BLL_Book
+BLL_Book -> DAL_Book : findById(bookingId)
+activate DAL_Book
+DAL_Book -> DB : SELECT * FROM bookings WHERE id = ?
+activate DB
+DB --> DAL_Book : Booking (status=PAID)
+deactivate DB
+DAL_Book --> BLL_Book : Booking
+deactivate DAL_Book
+
+opt Booking status is PAID
+    BLL_Book -> DAL_Item : findByBookingId(bookingId)
+    activate DAL_Item
+    DAL_Item -> DB : SELECT * FROM booking_items\nWHERE booking_id = ?
+    activate DB
+    DB --> DAL_Item : List<BookingItem>
+    deactivate DB
+    DAL_Item --> BLL_Book : all items
+    deactivate DAL_Item
+
+    alt All items CONFIRMED → SUCCESS
+        BLL_Book -> BLL_Book : setStatus(SUCCESS)
+    else All items REJECTED → FAILED
+        BLL_Book -> BLL_Book : setStatus(FAILED)
+    else Some still PENDING_PROVIDER
+        note right of BLL_Book : Keep PAID, wait
+    end
+
+    BLL_Book -> DAL_Book : save(booking)
+    activate DAL_Book
+    DAL_Book -> DB : UPDATE bookings SET status = ?
+    activate DB
+    DB --> DAL_Book : updated
+    deactivate DB
+    DAL_Book --> BLL_Book : Booking
+    deactivate DAL_Book
+end
+
+BLL_Book --> BLL_Mgr : void
+deactivate BLL_Book
+
+opt #FFEBEE REJECT: Auto-refund for rejected item
+
+    BLL_Mgr -> BLL_Book : getBookingById(bookingId)
+    activate BLL_Book
+    BLL_Book --> BLL_Mgr : Booking
+    deactivate BLL_Book
+
+    alt Booking was paid (PAID/SUCCESS/FAILED)
+        BLL_Mgr -> BLL_Mgr : refundAmount = capturedPrice * qty
+        BLL_Mgr -> BLL_Pay : createPartialRefund(bookingId,\nBANK_TRANSFER, refundAmount)
+        activate BLL_Pay
+        BLL_Pay -> DAL_Pay : save(refundPayment)
+        activate DAL_Pay
+        DAL_Pay -> DB : INSERT INTO payments\n(id, booking_id, amount=-X, type='REFUND')
+        activate DB
+        DB --> DAL_Pay : Payment
+        deactivate DB
+        DAL_Pay --> BLL_Pay : Payment
+        deactivate DAL_Pay
+        BLL_Pay --> BLL_Mgr : void
+        deactivate BLL_Pay
+    end
+end
+
+BLL_Mgr --> API : BookingItem
+deactivate BLL_Mgr
+API --> GUI : 200 OK (BookingItem JSON)
+deactivate API
+
+@enduml

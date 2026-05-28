@@ -1,0 +1,104 @@
+@startuml CD05_Module_Feedback
+title Module 5: Feedback (Đánh giá)
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+' ============================================================
+' GUI
+' ============================================================
+package "GUI (React Frontend)" <<Rectangle>> #E3F2FD {
+    class ServiceDetail {
+        + renderReviews()
+        + showAverageRating()
+    }
+    class MyBookings {
+        + submitReview()
+    }
+    class Reviews {
+        + viewFeedbacks()
+    }
+}
+
+' ============================================================
+' API
+' ============================================================
+package "API Layer" <<Rectangle>> #C8E6C9 {
+    class FeedbackController <<@RestController>> {
+        - feedbackService : FeedbackService
+        --
+        + submitFeedback(itemId, rating, comment) : Feedback
+        + getAverage(serviceId) : Double
+        + getByService(serviceId) : List<Feedback>
+        + getProviderFeedbacks(providerId) : List<Feedback>
+    }
+}
+
+' ============================================================
+' BLL
+' ============================================================
+package "Business Logic Layer" <<Rectangle>> #FFF9C4 {
+    interface FeedbackService {
+        + createFeedback(itemId, rating, comment) : Feedback
+        + getServiceFeedbacks(serviceId) : List<Feedback>
+        + getAverageRating(serviceId) : Double
+        + getProviderFeedbacks(providerId) : List<Feedback>
+    }
+    class FeedbackServiceImpl {
+        - feedbackRepository : FeedbackRepository
+        - bookingItemRepository : BookingItemRepository
+        - idGenerator : IdGeneratorService
+    }
+}
+
+' ============================================================
+' DAL
+' ============================================================
+package "Data Access Layer" <<Rectangle>> #FFCCBC {
+    interface FeedbackRepository <<JpaRepository>> {
+        + findByServiceIdOrderByCreatedAtDesc(serviceId) : List<Feedback>
+        + existsByBookingItemId(bookingItemId) : boolean
+        + getAverageRating(sid) : Double
+        + getFeedbackCount(sid) : Long
+        + findByBookingItem_Service_Provider_Id...(providerId) : List<Feedback>
+    }
+
+    class Feedback <<@Entity>> {
+        - id : String
+        - bookingItem : BookingItem
+        - service : Service
+        - customer : User
+        - rating : Integer
+        - comment : String
+        - createdAt : LocalDateTime
+    }
+}
+
+' ============================================================
+' DATABASE
+' ============================================================
+package "Database (PostgreSQL)" <<Database>> #F3E5F5 {
+    entity "feedbacks" as fb_table {
+        * id : VARCHAR <<PK>>
+        --
+        booking_item_id <<FK, UNIQUE>>
+        service_id <<FK → services>>
+        customer_id <<FK → users>>
+        rating : INTEGER
+        comment : TEXT
+        created_at : TIMESTAMP
+    }
+}
+
+' === RELATIONSHIPS ===
+ServiceDetail --> FeedbackController : HTTP GET
+MyBookings --> FeedbackController : HTTP POST
+Reviews --> FeedbackController : HTTP GET
+
+FeedbackController --> FeedbackService
+FeedbackService <|.. FeedbackServiceImpl
+FeedbackServiceImpl --> FeedbackRepository
+FeedbackRepository ..> Feedback
+Feedback ..> fb_table : maps to
+
+@enduml

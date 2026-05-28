@@ -1,0 +1,89 @@
+@startuml SD01_Register_Account
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-01: Register Account (Customer / Provider)**
+
+actor "User" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "UserController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "AuthService" as BLL_Auth
+    participant "UserService" as BLL_User
+    participant "PasswordUtils" as BLL_PW
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "UserRepository" as DAL
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Registration Flow ==
+
+GUI -> API : POST /api/auth/register/{customer|provider}\n(username, password, fullName, ...)
+activate API
+
+API -> BLL_Auth : register(user, type)
+activate BLL_Auth
+
+BLL_Auth -> BLL_User : existsByUsername(username)
+activate BLL_User
+BLL_User -> DAL : existsByUsername(username)
+activate DAL
+DAL -> DB : SELECT COUNT(*) FROM users\nWHERE username = ?
+activate DB
+DB --> DAL : count
+deactivate DB
+DAL --> BLL_User : boolean
+deactivate DAL
+BLL_User --> BLL_Auth : exists (true/false)
+deactivate BLL_User
+
+alt #FFE0E0 Username already exists
+    BLL_Auth --> API : throw RuntimeException\n("Username already exists!")
+    API --> GUI : 500 Internal Server Error
+else #E0FFE0 Username is available
+
+    BLL_Auth -> BLL_PW : hashPassword(rawPassword)
+    activate BLL_PW
+    BLL_PW --> BLL_Auth : hashedPassword (SHA-256)
+    deactivate BLL_PW
+
+    BLL_Auth -> BLL_Auth : setPassword(hashedPassword)
+
+    alt type = "PROVIDER"
+        BLL_Auth -> BLL_Auth : setRole(PROVIDER)
+        BLL_Auth -> BLL_User : saveUser(user, "PROV")
+    else type = "CUSTOMER"
+        BLL_Auth -> BLL_Auth : setRole(CUSTOMER)
+        BLL_Auth -> BLL_User : saveUser(user, "CUST")
+    end
+
+    activate BLL_User
+    BLL_User -> BLL_User : generateId(prefix, "user_seq")\ne.g. CUST00001 / PROV00002
+    BLL_User -> DAL : save(user)
+    activate DAL
+    DAL -> DB : INSERT INTO users\n(id, username, password, role, ...)
+    activate DB
+    DB --> DAL : saved entity
+    deactivate DB
+    DAL --> BLL_User : User
+    deactivate DAL
+    BLL_User --> BLL_Auth : User
+    deactivate BLL_User
+
+    BLL_Auth --> API : User
+    deactivate BLL_Auth
+
+    API --> GUI : 200 OK (User JSON)
+end
+
+deactivate API
+
+@enduml

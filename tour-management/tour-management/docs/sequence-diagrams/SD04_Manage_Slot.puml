@@ -1,0 +1,133 @@
+@startuml SD04_Manage_Slot
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title **SD-04: Provider Manages Service Slots (Create / Update / Delete)**
+
+actor "Provider" as GUI <<GUI Layer>>
+
+box "API Layer" #E3F2FD
+    participant "ServiceSlotController" as API
+end box
+
+box "Business Logic Layer" #E8F5E9
+    participant "ServiceSlotService" as BLL
+    participant "PermissionService" as BLL_Perm
+    participant "IdGeneratorService" as BLL_ID
+end box
+
+box "Data Access Layer" #FFF3E0
+    participant "ServiceSlotRepository" as DAL_Slot
+    participant "ServiceRepository" as DAL_Svc
+    participant "UserRepository" as DAL_User
+end box
+
+database "PostgreSQL" as DB <<Database>>
+
+== Create Slot ==
+
+GUI -> API : POST /api/service-slots/create/{serviceId}\n?providerId=xxx\n(startTime, maxCapacity)
+activate API
+
+API -> BLL : createSlot(providerId, serviceId, slot)
+activate BLL
+
+BLL -> BLL_Perm : canManageService(providerId, serviceId)
+activate BLL_Perm
+BLL_Perm -> DAL_User : findById(providerId)
+activate DAL_User
+DAL_User -> DB : SELECT * FROM users WHERE id = ?
+activate DB
+DB --> DAL_User : User
+deactivate DB
+DAL_User --> BLL_Perm : User (role=PROVIDER)
+deactivate DAL_User
+
+BLL_Perm -> DAL_Svc : findById(serviceId)
+activate DAL_Svc
+DAL_Svc -> DB : SELECT * FROM services WHERE id = ?
+activate DB
+DB --> DAL_Svc : Service
+deactivate DB
+DAL_Svc --> BLL_Perm : Service
+deactivate DAL_Svc
+
+BLL_Perm -> BLL_Perm : verify provider ownership
+BLL_Perm --> BLL : void (passed)
+deactivate BLL_Perm
+
+BLL -> DAL_Svc : findById(serviceId)
+activate DAL_Svc
+DAL_Svc -> DB : SELECT * FROM services WHERE id = ?
+activate DB
+DB --> DAL_Svc : Service
+deactivate DB
+DAL_Svc --> BLL : Service
+deactivate DAL_Svc
+
+BLL -> BLL_ID : generateId("SLOT", "slot_seq")
+activate BLL_ID
+BLL_ID -> DB : SELECT nextval('slot_seq')
+activate DB
+DB --> BLL_ID : sequence value
+deactivate DB
+BLL_ID --> BLL : "SLOT00001"
+deactivate BLL_ID
+
+BLL -> BLL : setId, setService, setActive(true)
+
+BLL -> DAL_Slot : save(slot)
+activate DAL_Slot
+DAL_Slot -> DB : INSERT INTO service_slots\n(id, service_id, start_time, max_capacity, active)
+activate DB
+DB --> DAL_Slot : saved entity
+deactivate DB
+DAL_Slot --> BLL : ServiceSlot
+deactivate DAL_Slot
+
+BLL --> API : ServiceSlot
+deactivate BLL
+API --> GUI : 200 OK (ServiceSlot JSON)
+deactivate API
+
+== Delete Slot (Soft Delete) ==
+
+GUI -> API : DELETE /api/service-slots/{slotId}\n?providerId=xxx
+activate API
+
+API -> BLL : deleteSlot(providerId, slotId)
+activate BLL
+
+BLL -> DAL_Slot : findById(slotId)
+activate DAL_Slot
+DAL_Slot -> DB : SELECT * FROM service_slots\nWHERE id = ?
+activate DB
+DB --> DAL_Slot : ServiceSlot
+deactivate DB
+DAL_Slot --> BLL : ServiceSlot
+deactivate DAL_Slot
+
+BLL -> BLL_Perm : canManageService(providerId, slot.service.id)
+activate BLL_Perm
+BLL_Perm --> BLL : void (passed)
+deactivate BLL_Perm
+
+BLL -> BLL : setActive(false)
+
+BLL -> DAL_Slot : save(slot)
+activate DAL_Slot
+DAL_Slot -> DB : UPDATE service_slots\nSET active = false WHERE id = ?
+activate DB
+DB --> DAL_Slot : updated
+deactivate DB
+DAL_Slot --> BLL : ServiceSlot
+deactivate DAL_Slot
+
+BLL --> API : void
+deactivate BLL
+API --> GUI : 200 OK ("Slot hidden successfully!")
+deactivate API
+
+@enduml
